@@ -60,8 +60,11 @@ Together, these datasets provide a unique opportunity to analyze **user engageme
 
 ## Repository Structure
 
+
 ├── Response_EDA.ipynb # Main notebook with analysis
+
 ├── README.md # Project documentation
+
 └── requirements.txt # Dependencies
 
 ---
