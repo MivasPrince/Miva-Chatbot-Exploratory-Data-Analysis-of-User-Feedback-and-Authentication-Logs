@@ -343,8 +343,11 @@ class Visualizer:
                 annotation_text=f"Selected: {st.session_state.selected_rating}⭐"
             )
         
-        fig.update_xaxis(dtick=1)
-        fig.update_layout(bargap=0.1, height=400)
+        fig.update_layout(
+            bargap=0.1, 
+            height=400,
+            xaxis=dict(dtick=1)
+        )
         st.plotly_chart(fig, use_container_width=True)
         
         # Show comments for selected rating
