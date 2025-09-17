@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  streamlit-app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - DB_HOST=${DB_HOST:-16.170.143.253}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-admin}
+      - DB_PASSWORD=${DB_PASSWORD:-password123}
+      - DB_NAME=${DB_NAME:-miva_ai_db}
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - miva-network
+
+  # Optional: Local PostgreSQL for development
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=${DB_NAME:-miva_ai_db}
+      - POSTGRES_USER=${DB_USER:-admin}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-password123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - miva-network
+    profiles:
+      - local-db
+
+networks:
+  miva-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
