@@ -191,6 +191,79 @@ class DataProcessor:
             """)
             return pd.DataFrame(tables, columns=['table_name'])
 
+class CommentAnalyzer:
+    """Comment analysis and display utilities"""
+    
+    @staticmethod
+    def get_comments_by_rating(df: pd.DataFrame, rating: int, comment_col: str = 'comment') -> pd.DataFrame:
+        """Get comments filtered by rating"""
+        if comment_col not in df.columns:
+            return pd.DataFrame()
+        
+        # Filter by rating and remove empty comments
+        filtered = df[df['rating'] == rating].copy()
+        filtered = filtered[filtered[comment_col].notna() & (filtered[comment_col].str.strip() != '')]
+        
+        return filtered.sort_values('created_at', ascending=False) if 'created_at' in filtered.columns else filtered
+    
+    @staticmethod
+    def analyze_comment_sentiment(comments: pd.Series) -> dict:
+        """Basic sentiment analysis of comments"""
+        if comments.empty:
+            return {"positive": 0, "negative": 0, "neutral": 0}
+        
+        # Simple keyword-based sentiment analysis
+        positive_words = ['good', 'great', 'excellent', 'amazing', 'love', 'perfect', 'awesome', 'fantastic', 'helpful', 'satisfied']
+        negative_words = ['bad', 'terrible', 'awful', 'hate', 'poor', 'disappointing', 'useless', 'frustrated', 'annoying', 'slow']
+        
+        sentiment_scores = []
+        for comment in comments:
+            if pd.isna(comment):
+                continue
+            
+            comment_lower = str(comment).lower()
+            positive_count = sum(1 for word in positive_words if word in comment_lower)
+            negative_count = sum(1 for word in negative_words if word in comment_lower)
+            
+            if positive_count > negative_count:
+                sentiment_scores.append('positive')
+            elif negative_count > positive_count:
+                sentiment_scores.append('negative')
+            else:
+                sentiment_scores.append('neutral')
+        
+        total = len(sentiment_scores)
+        if total == 0:
+            return {"positive": 0, "negative": 0, "neutral": 0}
+        
+        return {
+            "positive": sentiment_scores.count('positive') / total * 100,
+            "negative": sentiment_scores.count('negative') / total * 100,
+            "neutral": sentiment_scores.count('neutral') / total * 100
+        }
+    
+    @staticmethod
+    def get_comment_statistics(df: pd.DataFrame, comment_col: str = 'comment') -> dict:
+        """Get basic statistics about comments"""
+        if comment_col not in df.columns:
+            return {}
+        
+        comments = df[comment_col].dropna()
+        if comments.empty:
+            return {}
+        
+        # Calculate statistics
+        lengths = comments.astype(str).str.len()
+        word_counts = comments.astype(str).str.split().str.len()
+        
+        return {
+            "total_comments": len(comments),
+            "avg_length": lengths.mean(),
+            "avg_words": word_counts.mean(),
+            "longest_comment": lengths.max(),
+            "shortest_comment": lengths.min()
+        }
+
 class Visualizer:
     """Visualization utilities using Plotly"""
     
@@ -215,6 +288,179 @@ class Visualizer:
         )
         fig.update_layout(height=max(300, 40*len(na_counts)))
         st.plotly_chart(fig, use_container_width=True)
+    
+    @staticmethod
+    def plot_interactive_rating_distribution(df: pd.DataFrame, col: str, title: str, comment_col: str = 'comment'):
+        """Create interactive rating histogram with click functionality"""
+        data = df[col].dropna()
+        if data.empty:
+            st.warning(f"No data in {col}")
+            return
+        
+        # Create rating distribution
+        rating_counts = data.value_counts().sort_index()
+        
+        # Check if comments exist
+        has_comments = comment_col in df.columns and not df[comment_col].isna().all()
+        
+        if has_comments:
+            st.markdown("#### 📊 Interactive Rating Distribution")
+            st.info("💡 Click on a rating number below to view comments for that rating!")
+            
+            # Create clickable rating buttons
+            st.markdown("##### Select a rating to view comments:")
+            cols = st.columns(5)
+            
+            # Create session state for selected rating if not exists
+            if 'selected_rating' not in st.session_state:
+                st.session_state.selected_rating = None
+            
+            # Rating buttons
+            for i, rating in enumerate([1, 2, 3, 4, 5]):
+                with cols[i]:
+                    count = rating_counts.get(rating, 0)
+                    if st.button(f"⭐ {rating}\n({count} reviews)", 
+                               key=f"rating_{rating}",
+                               type="primary" if st.session_state.selected_rating == rating else "secondary"):
+                        st.session_state.selected_rating = rating
+        
+        # Plot the distribution
+        fig = px.histogram(
+            x=data,
+            nbins=5,
+            title=f"{title}: Rating Distribution",
+            labels={'x': col, 'y': 'Frequency'},
+            color_discrete_sequence=['#1f77b4']
+        )
+        
+        # Highlight selected rating if any
+        if has_comments and st.session_state.selected_rating is not None:
+            fig.add_vline(
+                x=st.session_state.selected_rating,
+                line_dash="dash",
+                line_color="red",
+                line_width=3,
+                annotation_text=f"Selected: {st.session_state.selected_rating}⭐"
+            )
+        
+        fig.update_xaxis(dtick=1)
+        fig.update_layout(bargap=0.1, height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show comments for selected rating
+        if has_comments and st.session_state.selected_rating is not None:
+            Visualizer._display_comments_for_rating(
+                df, st.session_state.selected_rating, comment_col, title
+            )
+    
+    @staticmethod
+    def _display_comments_for_rating(df: pd.DataFrame, rating: int, comment_col: str, title: str):
+        """Display comments for a specific rating"""
+        comment_analyzer = CommentAnalyzer()
+        
+        # Get comments for the selected rating
+        filtered_comments = comment_analyzer.get_comments_by_rating(df, rating, comment_col)
+        
+        if filtered_comments.empty:
+            st.warning(f"No comments found for {rating}⭐ rating.")
+            return
+        
+        st.markdown(f"### 💬 Comments for {rating}⭐ Rating")
+        
+        # Comment statistics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("📝 Total Comments", len(filtered_comments))
+        
+        with col2:
+            avg_length = filtered_comments[comment_col].astype(str).str.len().mean()
+            st.metric("📏 Avg Length", f"{avg_length:.0f} chars")
+        
+        with col3:
+            if 'created_at' in filtered_comments.columns:
+                latest_date = filtered_comments['created_at'].max()
+                st.metric("📅 Latest", latest_date.strftime("%m/%d") if pd.notna(latest_date) else "N/A")
+        
+        with col4:
+            unique_users = filtered_comments['email'].nunique() if 'email' in filtered_comments.columns else 0
+            st.metric("👥 Unique Users", unique_users)
+        
+        # Sentiment analysis
+        sentiment = comment_analyzer.analyze_comment_sentiment(filtered_comments[comment_col])
+        if sentiment:
+            st.markdown("#### 🎭 Sentiment Analysis")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("😊 Positive", f"{sentiment['positive']:.1f}%", 
+                         delta=f"{sentiment['positive'] - 33.3:.1f}%" if sentiment['positive'] != 33.3 else None)
+            with col2:
+                st.metric("😐 Neutral", f"{sentiment['neutral']:.1f}%")
+            with col3:
+                st.metric("😞 Negative", f"{sentiment['negative']:.1f}%",
+                         delta=f"{sentiment['negative'] - 33.3:.1f}%" if sentiment['negative'] != 33.3 else None,
+                         delta_color="inverse")
+        
+        # Display comments in an expandable format
+        st.markdown("#### 📋 Individual Comments")
+        
+        # Search/filter functionality
+        search_term = st.text_input("🔍 Search in comments:", placeholder="Type to filter comments...")
+        
+        # Filter comments based on search
+        display_comments = filtered_comments
+        if search_term:
+            mask = display_comments[comment_col].astype(str).str.contains(search_term, case=False, na=False)
+            display_comments = display_comments[mask]
+            st.info(f"Found {len(display_comments)} comments matching '{search_term}'")
+        
+        # Pagination
+        comments_per_page = 10
+        total_comments = len(display_comments)
+        total_pages = (total_comments + comments_per_page - 1) // comments_per_page
+        
+        if total_pages > 1:
+            col1, col2, col3 = st.columns([2, 1, 2])
+            with col2:
+                page = st.selectbox("Page", range(1, total_pages + 1), key=f"page_rating_{rating}")
+            
+            start_idx = (page - 1) * comments_per_page
+            end_idx = min(start_idx + comments_per_page, total_comments)
+            display_comments = display_comments.iloc[start_idx:end_idx]
+        
+        # Display comments
+        for idx, row in display_comments.iterrows():
+            with st.expander(
+                f"💬 Comment #{idx} - {row.get('email', 'Anonymous')} "
+                f"({row.get('created_at', 'Unknown date').strftime('%Y-%m-%d %H:%M') if pd.notna(row.get('created_at')) else 'Unknown date'})",
+                expanded=False
+            ):
+                # Comment content
+                st.markdown("**Comment:**")
+                st.write(row[comment_col])
+                
+                # Additional metadata in columns
+                if any(col in row for col in ['user_agent', 'ip_address', 'email']):
+                    st.markdown("**Details:**")
+                    detail_cols = st.columns(3)
+                    
+                    with detail_cols[0]:
+                        if 'email' in row and pd.notna(row['email']):
+                            st.text(f"📧 {row['email']}")
+                    
+                    with detail_cols[1]:
+                        if 'ip_address' in row and pd.notna(row['ip_address']):
+                            st.text(f"🌐 {row['ip_address']}")
+                    
+                    with detail_cols[2]:
+                        if 'created_at' in row and pd.notna(row['created_at']):
+                            st.text(f"🕒 {row['created_at'].strftime('%H:%M:%S')}")
+        
+        # Clear selection button
+        if st.button("🔄 Clear Selection", key=f"clear_rating_{rating}"):
+            st.session_state.selected_rating = None
+            st.experimental_rerun()
     
     @staticmethod
     def plot_rating_distribution(df: pd.DataFrame, col: str, title: str):
@@ -354,6 +600,7 @@ def create_dashboard():
     db_manager = DatabaseManager()
     processor = DataProcessor()
     viz = Visualizer()
+    comment_analyzer = CommentAnalyzer()
     
     # Header
     st.markdown('<h1 class="main-header">📊 Miva AI Database Analytics Dashboard</h1>', unsafe_allow_html=True)
@@ -499,8 +746,9 @@ def create_dashboard():
                 
                 if show_distributions:
                     with st.expander("📊 Data Distributions", expanded=True):
+                        # Interactive Rating Distribution with Comments
                         if 'rating' in df_chat.columns:
-                            viz.plot_rating_distribution(df_chat, 'rating', 'Chat Feedback')
+                            viz.plot_interactive_rating_distribution(df_chat, 'rating', 'Chat Feedback', 'comment')
                         
                         col1, col2 = st.columns(2)
                         with col1:
@@ -509,6 +757,54 @@ def create_dashboard():
                         with col2:
                             if 'ip_address' in df_chat.columns:
                                 viz.plot_top_categories(df_chat, 'ip_address', 'Chat Feedback', 10)
+                
+                # NEW: Comments Analysis Section
+                if 'comment' in df_chat.columns and not df_chat['comment'].isna().all():
+                    with st.expander("💬 Comments Analysis", expanded=False):
+                        st.markdown("#### 📊 Comment Overview")
+                        
+                        # Comment statistics
+                        comment_stats = comment_analyzer.get_comment_statistics(df_chat, 'comment')
+                        if comment_stats:
+                            col1, col2, col3, col4 = st.columns(4)
+                            
+                            with col1:
+                                st.metric("📝 Total Comments", f"{comment_stats['total_comments']:,}")
+                            with col2:
+                                st.metric("📏 Avg Length", f"{comment_stats['avg_length']:.0f} chars")
+                            with col3:
+                                st.metric("📖 Avg Words", f"{comment_stats['avg_words']:.1f}")
+                            with col4:
+                                st.metric("📋 Longest", f"{comment_stats['longest_comment']} chars")
+                        
+                        # Comments by rating breakdown
+                        st.markdown("#### 📈 Comments by Rating")
+                        comments_by_rating = df_chat.groupby('rating')['comment'].count().reset_index()
+                        comments_by_rating.columns = ['Rating', 'Comment Count']
+                        
+                        fig = px.bar(
+                            comments_by_rating,
+                            x='Rating',
+                            y='Comment Count',
+                            title="Number of Comments by Rating",
+                            color='Comment Count',
+                            color_continuous_scale='Blues'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Recent comments preview
+                        st.markdown("#### 🕒 Recent Comments Preview")
+                        recent_comments = df_chat[df_chat['comment'].notna()].nlargest(5, 'created_at') if 'created_at' in df_chat.columns else df_chat[df_chat['comment'].notna()].tail(5)
+                        
+                        for idx, row in recent_comments.iterrows():
+                            with st.container():
+                                col1, col2 = st.columns([1, 4])
+                                with col1:
+                                    st.metric("Rating", f"{row['rating']}⭐")
+                                with col2:
+                                    st.markdown(f"**{row.get('email', 'Anonymous')}** - {row.get('created_at', 'Unknown date')}")
+                                    st.write(f"💬 _{row['comment']}_")
+                                st.markdown("---")
                 
                 if show_trends:
                     with st.expander("📈 Time Trends Analysis", expanded=True):
