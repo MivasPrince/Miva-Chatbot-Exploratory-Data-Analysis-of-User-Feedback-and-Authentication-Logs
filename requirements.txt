@@ -1,8 +1,7 @@
-streamlit==1.38.0
-pandas==2.2.2
-numpy==1.26.4
-matplotlib==3.9.0
-SQLAlchemy==2.0.31
-python-dateutil==2.9.0.post0
-psycopg[binary]==3.2.1
-
+streamlit>=1.28.0
+pandas>=2.0.0
+psycopg2-binary>=2.9.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.15.0
