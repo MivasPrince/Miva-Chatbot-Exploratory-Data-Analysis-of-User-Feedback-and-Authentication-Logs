@@ -31,8 +31,8 @@ def get_engine():
     cfg = _secrets()
     assert cfg["host"] and cfg["database"] and cfg["user"], "Database secrets missing."
     url = (
-        f"postgresql+psycopg2://{cfg['user']}:{cfg['password']}"
-        f"@{cfg['host']}:{cfg['port']}/{cfg['database']}?sslmode={cfg['sslmode']}"
+    f"postgresql+psycopg://{cfg['user']}:{cfg['password']}"
+    f"@{cfg['host']}:{cfg['port']}/{cfg['database']}?sslmode={cfg['sslmode']}"
     )
     engine = create_engine(url, pool_pre_ping=True)
     return engine
