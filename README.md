@@ -1,149 +1,278 @@
-# MIVA AI Data EDA
+# 📊 Miva AI Database Analytics Dashboard
 
-## Project Overview
-This repository contains a **comprehensive exploratory data analysis (EDA)** of two core tables from the **MIVA AI database**:
+A comprehensive Streamlit dashboard for analyzing Miva AI database content with interactive visualizations and real-time data exploration.
 
-- **chat_feedback** — user-provided ratings, comments, and interaction logs  
-- **otps** — one-time password (OTP) authentication records  
+## 🚀 Features
 
-Together, these datasets provide a unique opportunity to analyze **user engagement**, **sentiment**, and **system verification reliability**.
+### 📋 Database Overview
+- Real-time connection testing
+- Table statistics and row counts
+- Database schema information
 
----
+### 💬 Chat Feedback Analysis
+- Rating distributions and trends
+- User agent and IP address analysis
+- Time-based trend analysis
+- Missing data visualization
+- Text length analysis
 
-## Objectives
-- Understand the structure and quality of both datasets  
-- Explore distributions of numeric and categorical features  
-- Detect missing values, anomalies, and outliers  
-- Identify correlations and trends  
-- Derive domain-specific insights (feedback sentiment patterns, OTP usage frequency and validation success)
+### 🔐 OTP Analysis
+- OTP usage statistics
+- Code length distributions
+- Status and usage patterns
+- User engagement metrics
 
----
+### 📊 Custom Analysis
+- Custom SQL query execution
+- Interactive data exploration
+- Export functionality
+- Real-time results
 
-## Tech Stack
-- **Python** (pandas, numpy)  
-- **Matplotlib** (for plotting)  
-- **PostgreSQL** (data source)  
-- **Jupyter/Colab** (interactive analysis)  
+## 🛠️ Technologies Used
 
----
+- **Streamlit** - Interactive web app framework
+- **PostgreSQL** - Database backend
+- **Plotly** - Interactive visualizations
+- **Pandas** - Data manipulation
+- **psycopg2** - PostgreSQL adapter
 
-## Key Analyses
-1. **Data Quality Checks**  
-   - Missing values per column  
-   - Schema review and datatype consistency  
+## 📦 Installation
 
-2. **Descriptive Statistics**  
-   - Numerical summaries (mean, std, percentiles)  
-   - Categorical frequency distributions  
+### Local Development
 
-3. **Visualizations**  
-   - Histograms for numeric features  
-   - Bar charts for categorical variables  
-   - Correlation heatmaps  
-   - Boxplots for outlier detection  
-   - Time-series trends for datetime fields  
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/miva-ai-dashboard.git
+   cd miva-ai-dashboard
+   ```
 
-4. **Domain-Specific Insights**  
-   - OTP length distributions & usage patterns  
-   - Success/failure trends for OTP validation  
-   - Chat feedback ratings & sentiment breakdowns  
-   - Feedback trends over time  
+2. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
----
+3. **Configure database connection**
+   
+   Update the database configuration in `app.py`:
+   ```python
+   db_config = {
+       "host": "your_host",
+       "port": 5432,
+       "user": "your_username", 
+       "password": "your_password",
+       "database": "your_database"
+   }
+   ```
 
-## Results & Insights
-- **User Experience**: Feedback distributions highlight strengths and weaknesses in chat interactions, providing actionable insight into user satisfaction.  
-- **System Reliability**: OTP trends reveal authentication load, potential misuse, and system performance over time.  
-- **Opportunities**: Combining user feedback and authentication logs can support predictive modeling for churn, fraud detection, and proactive system monitoring.  
+4. **Run the application**
+   ```bash
+   streamlit run app.py
+   ```
 
----
+### 🌐 Deployment Options
 
-## Repository Structure
+#### Streamlit Cloud (Recommended)
 
+1. **Push to GitHub**
+   ```bash
+   git add .
+   git commit -m "Initial commit"
+   git push origin main
+   ```
 
-├── Response_EDA.ipynb # Main notebook with analysis
+2. **Deploy on Streamlit Cloud**
+   - Go to [share.streamlit.io](https://share.streamlit.io)
+   - Connect your GitHub repository
+   - Select `app.py` as the main file
+   - Add secrets in the Streamlit Cloud dashboard:
+     ```toml
+     [database]
+     host = "your_host"
+     port = 5432
+     user = "your_username"
+     password = "your_password" 
+     database = "your_database"
+     ```
 
-├── README.md # Project documentation
+#### Heroku Deployment
 
-└── requirements.txt # Dependencies
+1. **Create Procfile**
+   ```
+   web: sh setup.sh && streamlit run app.py
+   ```
 
----
+2. **Create setup.sh**
+   ```bash
+   mkdir -p ~/.streamlit/
+   echo "\
+   [server]\n\
+   headless = true\n\
+   port = $PORT\n\
+   enableCORS = false\n\
+   \n\
+   " > ~/.streamlit/config.toml
+   ```
 
-## Next Steps
-- Build predictive models for user satisfaction and OTP failures  
-- Develop anomaly detection for unusual OTP request patterns  
-- Deploy interactive dashboards (e.g., Streamlit, Power BI, or Tableau)  
-- Integrate with MIVA’s real-time monitoring system for proactive insights  
+#### Docker Deployment
 
----
+1. **Create Dockerfile**
+   ```dockerfile
+   FROM python:3.9-slim
+   
+   WORKDIR /app
+   COPY requirements.txt .
+   RUN pip install -r requirements.txt
+   
+   COPY . .
+   
+   EXPOSE 8501
+   
+   CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+   ```
 
+2. **Build and run**
+   ```bash
+   docker build -t miva-dashboard .
+   docker run -p 8501:8501 miva-dashboard
+   ```
 
+## 🔧 Configuration
 
+### Environment Variables
 
-## MIVA Interaction & OTP EDA (Streamlit)
+For production deployment, use environment variables:
 
-A Streamlit app that connects to a PostgreSQL database and explores **chat feedback** and **OTP authentication** tables with clean, actionable visuals.
+```python
+import os
 
-## ✨ Features
-- Connects to Postgres via Streamlit Secrets / env vars
-- Table picker, schema preview, sample data
-- Missingness bars, numeric histograms, category bars
-- Correlation heatmaps, boxplots, daily time trends
-- Domain-special views:
-  - **OTPs**: code length, status mix, requests over time
-  - **Chat Feedback**: rating/sentiment/text-length distributions, events over time
-- Safe SQL runner (read-only enforced)
+db_config = {
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", "5432")),
+    "user": os.getenv("DB_USER", "admin"),
+    "password": os.getenv("DB_PASSWORD", "password"),
+    "database": os.getenv("DB_NAME", "miva_ai_db")
+}
+```
 
-## 🧱 Tech
-`streamlit`, `pandas`, `numpy`, `matplotlib`, `psycopg2-binary`, `SQLAlchemy`
+### Streamlit Secrets
 
-## 🚀 Run locally
+For Streamlit Cloud, add to `.streamlit/secrets.toml`:
 
-```bash
-# 1) Clone
-git clone https://github.com/<you>/miva-eda-app.git
-cd miva-eda-app
-
-# 2) (Optional) create venv
-python -m venv .venv && source .venv/bin/activate
-
-# 3) Install deps
-pip install -r requirements.txt
-
-# 4) Provide DB creds via env or .streamlit/secrets.toml
-export PGHOST=16.170.143.253
-export PGPORT=5432
-export PGDATABASE=miva_ai_db
-export PGUSER=admin
-export PGPASSWORD=********
-export PGSSLMODE=prefer
-export PGSCHEMA=public
-
-# or create .streamlit/secrets.toml (not committed)
-# see .streamlit/secrets.toml template
-
-# 5) Launch
-streamlit run streamlit_app.py
-
-##Deploy on Streamlit Community Cloud
-
-Push this repo to GitHub.
-
-Go to https://share.streamlit.io/
- → New app → Select your repo and streamlit_app.py.
-
-In App → Settings → Secrets, add:
-
-[postgres]
-host = "16.170.143.253"
+```toml
+[database]
+host = "your_host"
 port = 5432
-database = "miva_ai_db"
-user = "admin"
-password = "********"
-sslmode = "prefer"
-schema = "public"
+user = "your_username"
+password = "your_password"
+database = "your_database"
+```
 
+Then update the app to use secrets:
 
+```python
+import streamlit as st
 
-## Author
-Developed by **The MIVA R & D Team** as part of MIVA AI analytics initiatives.  
+db_config = {
+    "host": st.secrets["database"]["host"],
+    "port": st.secrets["database"]["port"], 
+    "user": st.secrets["database"]["user"],
+    "password": st.secrets["database"]["password"],
+    "database": st.secrets["database"]["database"]
+}
+```
+
+## 📊 Usage
+
+### Dashboard Navigation
+
+1. **Overview Tab**: Database connection status and table statistics
+2. **Chat Feedback Tab**: Detailed analysis of chat feedback data
+3. **OTPs Tab**: OTP usage patterns and statistics  
+4. **Custom Analysis Tab**: Execute custom SQL queries
+
+### Key Features
+
+- **Interactive Charts**: Hover, zoom, and filter data
+- **Real-time Updates**: Refresh data with the sidebar button
+- **Data Export**: Download results as CSV files
+- **Responsive Design**: Works on desktop and mobile
+
+### Sample Queries
+
+```sql
+-- Top rated feedback
+SELECT * FROM chat_feedback WHERE rating = 5 ORDER BY created_at DESC;
+
+-- OTP usage by email domain
+SELECT SPLIT_PART(email, '@', 2) as domain, COUNT(*) 
+FROM otps 
+GROUP BY domain 
+ORDER BY count DESC;
+
+-- Daily feedback trends
+SELECT DATE(created_at) as date, COUNT(*) as feedback_count
+FROM chat_feedback 
+GROUP BY DATE(created_at) 
+ORDER BY date;
+```
+
+## 🔒 Security
+
+- Database credentials should be stored securely
+- Use environment variables or secrets management
+- Enable SSL for database connections in production
+- Implement proper access controls
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Connection Error**: 
+- Verify database credentials
+- Check network connectivity
+- Ensure PostgreSQL is running
+
+**Module Not Found**:
+- Run `pip install -r requirements.txt`
+- Check Python version compatibility
+
+**Performance Issues**:
+- Enable caching with `@st.cache_data`
+- Limit query result sizes
+- Use database indexes
+
+### Debug Mode
+
+Run with debug logging:
+```bash
+streamlit run app.py --logger.level=debug
+```
+
+## 📞 Support
+
+- 📧 Email: support@miva.ai
+- 💬 Issues: [GitHub Issues](https://github.com/yourusername/miva-ai-dashboard/issues)
+- 📖 Documentation: [Wiki](https://github.com/yourusername/miva-ai-dashboard/wiki)
+
+## 🙏 Acknowledgments
+
+- Streamlit team for the amazing framework
+- PostgreSQL community
+- Plotly for interactive visualizations
+- All contributors and users
+
+---
+
+**⭐ If you find this project helpful, please give it a star!**
