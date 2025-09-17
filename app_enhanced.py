@@ -168,10 +168,11 @@ class DataProcessor:
     def get_table_info(db_manager: DatabaseManager) -> pd.DataFrame:
         """Get table information with row counts"""
         try:
+            # First try with the correct PostgreSQL system table structure
             query = """
             SELECT 
                 schemaname,
-                tablename,
+                relname as tablename,
                 n_tup_ins as inserts,
                 n_tup_upd as updates,
                 n_tup_del as deletes,
@@ -180,16 +181,38 @@ class DataProcessor:
             FROM pg_stat_user_tables 
             ORDER BY n_live_tup DESC;
             """
+            result = db_manager.query_df(query)
+            if not result.empty:
+                return result
+        except Exception as e:
+            print(f"Primary query failed: {e}")
+        
+        try:
+            # Fallback: Simple table list with manual row count
+            query = """
+            SELECT 
+                table_name as tablename,
+                (SELECT COUNT(*) FROM information_schema.columns 
+                 WHERE table_name = t.table_name AND table_schema = 'public') as column_count
+            FROM information_schema.tables t
+            WHERE table_schema = 'public'
+            ORDER BY table_name;
+            """
             return db_manager.query_df(query)
-        except:
-            # Fallback query
+        except Exception as e:
+            print(f"Fallback query failed: {e}")
+        
+        # Final fallback: Just table names
+        try:
             tables = db_manager.run_query("""
                 SELECT table_name
                 FROM information_schema.tables
                 WHERE table_schema = 'public'
                 ORDER BY table_name;
             """)
-            return pd.DataFrame(tables, columns=['table_name'])
+            return pd.DataFrame(tables, columns=['tablename'])
+        except:
+            return pd.DataFrame()
 
 class CommentAnalyzer:
     """Comment analysis and display utilities"""
@@ -540,8 +563,10 @@ class Visualizer:
             color=vc.values,
             color_continuous_scale='Viridis'
         )
-        fig.update_layout(height=max(400, 30*len(vc)))
-        fig.update_yaxis(categoryorder="total ascending")
+        fig.update_layout(
+            height=max(400, 30*len(vc)),
+            yaxis=dict(categoryorder="total ascending")
+        )
         st.plotly_chart(fig, use_container_width=True)
     
     @staticmethod
