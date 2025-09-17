@@ -77,5 +77,73 @@ Together, these datasets provide a unique opportunity to analyze **user engageme
 
 ---
 
+
+
+
+## MIVA Interaction & OTP EDA (Streamlit)
+
+A Streamlit app that connects to a PostgreSQL database and explores **chat feedback** and **OTP authentication** tables with clean, actionable visuals.
+
+## ✨ Features
+- Connects to Postgres via Streamlit Secrets / env vars
+- Table picker, schema preview, sample data
+- Missingness bars, numeric histograms, category bars
+- Correlation heatmaps, boxplots, daily time trends
+- Domain-special views:
+  - **OTPs**: code length, status mix, requests over time
+  - **Chat Feedback**: rating/sentiment/text-length distributions, events over time
+- Safe SQL runner (read-only enforced)
+
+## 🧱 Tech
+`streamlit`, `pandas`, `numpy`, `matplotlib`, `psycopg2-binary`, `SQLAlchemy`
+
+## 🚀 Run locally
+
+```bash
+# 1) Clone
+git clone https://github.com/<you>/miva-eda-app.git
+cd miva-eda-app
+
+# 2) (Optional) create venv
+python -m venv .venv && source .venv/bin/activate
+
+# 3) Install deps
+pip install -r requirements.txt
+
+# 4) Provide DB creds via env or .streamlit/secrets.toml
+export PGHOST=16.170.143.253
+export PGPORT=5432
+export PGDATABASE=miva_ai_db
+export PGUSER=admin
+export PGPASSWORD=********
+export PGSSLMODE=prefer
+export PGSCHEMA=public
+
+# or create .streamlit/secrets.toml (not committed)
+# see .streamlit/secrets.toml template
+
+# 5) Launch
+streamlit run streamlit_app.py
+
+##Deploy on Streamlit Community Cloud
+
+Push this repo to GitHub.
+
+Go to https://share.streamlit.io/
+ → New app → Select your repo and streamlit_app.py.
+
+In App → Settings → Secrets, add:
+
+[postgres]
+host = "16.170.143.253"
+port = 5432
+database = "miva_ai_db"
+user = "admin"
+password = "********"
+sslmode = "prefer"
+schema = "public"
+
+
+
 ## Author
 Developed by **The MIVA R & D Team** as part of MIVA AI analytics initiatives.  
