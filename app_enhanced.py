@@ -1177,22 +1177,156 @@ def create_dashboard():
             
             with st.spinner("Loading cross-table analysis..."):
                 try:
-                    # User engagement correlation
-                    correlation_query = """
-                    SELECT 
-                        COALESCE(cf.email, o.email) as email,
-                        COUNT(DISTINCT cf.id) as feedback_count,
-                        AVG(cf.rating) as avg_rating,
-                        COUNT(DISTINCT o.id) as otp_count,
-                        AVG(CASE WHEN o.used = true THEN 1.0 ELSE 0.0 END) as otp_usage_rate
-                    FROM chat_feedback cf
-                    FULL OUTER JOIN otps o ON cf.email = o.email
-                    WHERE COALESCE(cf.email, o.email) IS NOT NULL
-                    GROUP BY COALESCE(cf.email, o.email)
-                    HAVING COUNT(DISTINCT cf.id) > 0 OR COUNT(DISTINCT o.id) > 0;
-                    """
+                    # User engagement correlation - Updated for correct OTP table structure
+                    try:
+                        # Since OTP table uses user_id instead of email, we need a different approach
+                        st.info("📊 Note: OTP table uses user_id rather than email. Showing separate analysis for each table.")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("#### 💬 Chat Feedback Analysis")
+                            feedback_analysis = db_manager.query_df("""
+                                SELECT 
+                                    COUNT(*) as total_feedback,
+                                    ROUND(AVG(rating), 2) as avg_rating,
+                                    COUNT(DISTINCT email) as unique_users,
+                                    COUNT(CASE WHEN rating >= 4 THEN 1 END) as positive_feedback,
+                                    COUNT(CASE WHEN rating <= 2 THEN 1 END) as negative_feedback
+                                FROM chat_feedback
+                                WHERE created_at >= CURRENT_DATE - INTERVAL '30 days';
+                            """)
+                            
+                            if not feedback_analysis.empty:
+                                for _, row in feedback_analysis.iterrows():
+                                    st.metric("Total Feedback", f"{row['total_feedback']:,}")
+                                    st.metric("Average Rating", f"{row['avg_rating']}/5")
+                                    st.metric("Unique Users", f"{row['unique_users']:,}")
+                                    positive_pct = (row['positive_feedback'] / row['total_feedback'] * 100) if row['total_feedback'] > 0 else 0
+                                    st.metric("Positive Rate", f"{positive_pct:.1f}%")
+                        
+                        with col2:
+                            st.markdown("#### 🔐 OTP Analysis")
+                            otp_analysis = db_manager.query_df("""
+                                SELECT 
+                                    COUNT(*) as total_otps,
+                                    COUNT(DISTINCT user_id) as unique_users,
+                                    ROUND(AVG(CASE WHEN is_used = true THEN 1.0 ELSE 0.0 END) * 100, 1) as usage_rate,
+                                    COUNT(CASE WHEN is_used = true THEN 1 END) as used_otps,
+                                    COUNT(CASE WHEN is_used = false THEN 1 END) as unused_otps
+                                FROM otps
+                                WHERE created_at >= CURRENT_DATE - INTERVAL '30 days';
+                            """)
+                            
+                            if not otp_analysis.empty:
+                                for _, row in otp_analysis.iterrows():
+                                    st.metric("Total OTPs", f"{row['total_otps']:,}")
+                                    st.metric("Unique Users", f"{row['unique_users']:,}")
+                                    st.metric("Usage Rate", f"{row['usage_rate']}%")
+                                    st.metric("Used OTPs", f"{row['used_otps']:,}")
+                        
+                        # Daily trends comparison
+                        st.markdown("#### 📈 Daily Activity Comparison")
+                        
+                        daily_trends = db_manager.query_df("""
+                            WITH feedback_daily AS (
+                                SELECT 
+                                    DATE(created_at) as date,
+                                    COUNT(*) as feedback_count,
+                                    AVG(rating) as avg_rating
+                                FROM chat_feedback
+                                WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+                                GROUP BY DATE(created_at)
+                            ),
+                            otp_daily AS (
+                                SELECT 
+                                    DATE(created_at) as date,
+                                    COUNT(*) as otp_count,
+                                    ROUND(AVG(CASE WHEN is_used = true THEN 1.0 ELSE 0.0 END) * 100, 1) as usage_rate
+                                FROM otps
+                                WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+                                GROUP BY DATE(created_at)
+                            )
+                            SELECT 
+                                COALESCE(f.date, o.date) as date,
+                                COALESCE(f.feedback_count, 0) as feedback_count,
+                                COALESCE(f.avg_rating, 0) as avg_rating,
+                                COALESCE(o.otp_count, 0) as otp_count,
+                                COALESCE(o.usage_rate, 0) as usage_rate
+                            FROM feedback_daily f
+                            FULL OUTER JOIN otp_daily o ON f.date = o.date
+                            ORDER BY date DESC
+                            LIMIT 30;
+                        """)
+                        
+                        if not daily_trends.empty:
+                            # Create comparison chart
+                            fig = make_subplots(
+                                rows=2, cols=2,
+                                subplot_titles=['Daily Feedback Count', 'Daily Average Rating', 'Daily OTP Count', 'Daily OTP Usage Rate'],
+                                specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                                      [{"secondary_y": False}, {"secondary_y": False}]]
+                            )
+                            
+                            # Feedback count
+                            fig.add_trace(
+                                go.Scatter(x=daily_trends['date'], y=daily_trends['feedback_count'], 
+                                          mode='lines+markers', name='Feedback Count', line=dict(color='blue')),
+                                row=1, col=1
+                            )
+                            
+                            # Average rating
+                            fig.add_trace(
+                                go.Scatter(x=daily_trends['date'], y=daily_trends['avg_rating'], 
+                                          mode='lines+markers', name='Avg Rating', line=dict(color='green')),
+                                row=1, col=2
+                            )
+                            
+                            # OTP count
+                            fig.add_trace(
+                                go.Scatter(x=daily_trends['date'], y=daily_trends['otp_count'], 
+                                          mode='lines+markers', name='OTP Count', line=dict(color='orange')),
+                                row=2, col=1
+                            )
+                            
+                            # OTP usage rate
+                            fig.add_trace(
+                                go.Scatter(x=daily_trends['date'], y=daily_trends['usage_rate'], 
+                                          mode='lines+markers', name='Usage Rate %', line=dict(color='red')),
+                                row=2, col=2
+                            )
+                            
+                            fig.update_layout(
+                                title="30-Day Activity Trends Comparison",
+                                height=600,
+                                showlegend=False
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Summary insights
+                            st.markdown("#### 💡 Key Insights")
+                            
+                            # Calculate some basic insights
+                            avg_feedback_per_day = daily_trends['feedback_count'].mean()
+                            avg_otp_per_day = daily_trends['otp_count'].mean()
+                            avg_usage_rate = daily_trends['usage_rate'].mean()
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Avg Daily Feedback", f"{avg_feedback_per_day:.1f}")
+                            with col2:
+                                st.metric("Avg Daily OTPs", f"{avg_otp_per_day:.1f}")
+                            with col3:
+                                st.metric("Avg Usage Rate", f"{avg_usage_rate:.1f}%")
+                        
+                        return  # Exit since we're showing alternative analysis
+                        
+                    except Exception as e:
+                        st.error(f"Error in advanced analysis: {e}")
+                        return
                     
-                    correlation_df = db_manager.query_df(correlation_query)
+                    correlation_df = None  # This won't be reached
                     
                     if not correlation_df.empty:
                         # Scatter plot: feedback vs OTP usage
