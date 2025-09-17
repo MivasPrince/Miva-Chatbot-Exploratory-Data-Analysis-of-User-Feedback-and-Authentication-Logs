@@ -1,0 +1,88 @@
+name: Deploy to Streamlit Cloud
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v3
+      with:
+        python-version: 3.9
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest flake8
+    
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Test application structure
+      run: |
+        python -c "import app; print('App structure is valid')"
+    
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run Bandit Security Scan
+      uses: securecodewarrior/github-action-bandit@v1
+      with:
+        config_file: '.bandit'
+        
+    - name: Check for secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build Docker image
+      run: |
+        docker build -t miva-dashboard:latest .
+        docker run -d --name test-container -p 8501:8501 miva-dashboard:latest
+        sleep 30
+        # Basic health check
+        curl -f http://localhost:8501/_stcore/health || exit 1
+        docker stop test-container
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [test, security-scan, build-docker]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy notification
+      run: |
+        echo "✅ All tests passed! Ready for Streamlit Cloud deployment."
+        echo "🚀 Visit https://share.streamlit.io to deploy this repository."
