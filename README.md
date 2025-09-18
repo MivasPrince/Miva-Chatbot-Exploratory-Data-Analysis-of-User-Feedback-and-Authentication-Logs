@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="https://i.imgur.com/azwWWQN.jpeg" alt="Miva Logo" width="220">
+  <img src="https://i.imgur.com/azwWWQN.jpeg" alt="Miva Logo" width="120"/>
+  <h1>Miva AI Database Analytics Dashboard</h1>
 </p>
+
 
 # 📊 Miva AI Database Analytics Dashboard
 
