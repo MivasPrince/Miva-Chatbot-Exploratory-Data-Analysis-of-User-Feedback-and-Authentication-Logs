@@ -597,19 +597,41 @@ class Visualizer:
             st.warning(f"No data in '{col}' for {title}")
             return
 
+        # Truncate long labels for better display
+        def truncate_label(label, max_length=50):
+            if len(str(label)) > max_length:
+                return str(label)[:max_length] + "..."
+            return str(label)
+
+        # Create truncated labels for display
+        display_labels = [truncate_label(label) for label in vc.index]
+        
         fig = px.bar(
             x=vc.values,
-            y=vc.index,
+            y=display_labels,
             orientation='h',
             title=f"{title}: Top {top_n} {col} Values",
             labels={'x': 'Count', 'y': col},
             color=vc.values,
-            color_continuous_scale='Blues'
+            color_continuous_scale='Blues',
+            hover_data={'y': vc.index.tolist()}  # Show full text on hover
         )
+        
+        # Update layout for better text display
         fig.update_layout(
-            height=max(400, 30*len(vc)),
-            yaxis=dict(categoryorder="total ascending")
+            height=max(500, 35*len(vc)),  # Increase height for better spacing
+            yaxis=dict(
+                categoryorder="total ascending",
+                tickmode='linear',
+                automargin=True  # Auto-adjust margins for text
+            ),
+            margin=dict(l=200, r=50, t=50, b=50),  # Increase left margin for labels
+            font=dict(size=10)  # Smaller font for better fit
         )
+        
+        # Update y-axis to show truncated labels properly
+        fig.update_yaxis(tickfont=dict(size=9))
+        
         st.plotly_chart(fig, use_container_width=True)
 
     @staticmethod
