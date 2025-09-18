@@ -679,7 +679,7 @@ def create_dashboard():
     # Sidebar
     with st.sidebar:
         # Add Miva Logo at the top
-        st.image("https://i.imgur.com/azwWWQN.jpeg", use_column_width=True)
+        st.image("https://i.imgur.com/azwWWQN.jpeg", use_container_width=True)
         
         st.markdown("### 🔧 Dashboard Controls")
 
