@@ -623,14 +623,12 @@ class Visualizer:
             yaxis=dict(
                 categoryorder="total ascending",
                 tickmode='linear',
-                automargin=True  # Auto-adjust margins for text
+                automargin=True,  # Auto-adjust margins for text
+                tickfont=dict(size=9)  # Smaller font for y-axis labels
             ),
             margin=dict(l=200, r=50, t=50, b=50),  # Increase left margin for labels
             font=dict(size=10)  # Smaller font for better fit
         )
-        
-        # Update y-axis to show truncated labels properly
-        fig.update_yaxis(tickfont=dict(size=9))
         
         st.plotly_chart(fig, use_container_width=True)
 
