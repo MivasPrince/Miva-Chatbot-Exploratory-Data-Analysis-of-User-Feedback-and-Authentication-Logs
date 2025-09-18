@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://i.imgur.com/azwWWQN.jpeg" alt="Miva Logo" width="220">
+</p>
+
 # 📊 Miva AI Database Analytics Dashboard
 
 A comprehensive Streamlit dashboard for analyzing Miva AI database content with interactive visualizations and real-time data exploration.
