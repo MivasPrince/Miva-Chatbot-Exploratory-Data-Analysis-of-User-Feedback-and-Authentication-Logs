@@ -4,7 +4,6 @@
 </p>
 
 
-# 📊 Miva AI Database Analytics Dashboard
 
 A comprehensive Streamlit dashboard for analyzing Miva AI database content with interactive visualizations and real-time data exploration.
 
