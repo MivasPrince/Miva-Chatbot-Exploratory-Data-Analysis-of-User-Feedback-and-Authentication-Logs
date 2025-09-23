@@ -1,442 +1,445 @@
 import os
+import json
+import math
+import textwrap
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import streamlit as st
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
-# =========================
-# Page / App Configuration
-# =========================
-st.set_page_config(page_title="MIVA DB EDA", page_icon="📊", layout="wide")
-
-st.title("📊 MIVA – Database Explorer & EDA")
-st.caption("Explore **chat_feedback**, **chat_messages**, **chat_sessions**, **conversation_history**, **conversation_sessions**, **otp_verifications**, **otps**, **user_feedback**.")
-
-# =========================
-# Secrets / Config Helpers
-# =========================
-def _load_secrets():
-    # Prefer Streamlit secrets; fallback to env vars
-    if "postgres" in st.secrets:
-        p = st.secrets["postgres"]
-        return {
-            "host": p.get("host"),
-            "port": p.get("port", 5432),
-            "database": p.get("database"),
-            "user": p.get("user"),
-            "password": p.get("password"),
-            "sslmode": p.get("sslmode", "prefer"),
-            "schema": p.get("schema", "public"),
-        }
-    return {
-        "host": os.getenv("PGHOST"),
-        "port": int(os.getenv("PGPORT", "5432")),
-        "database": os.getenv("PGDATABASE"),
-        "user": os.getenv("PGUSER"),
-        "password": os.getenv("PGPASSWORD"),
-        "sslmode": os.getenv("PGSSLMODE", "prefer"),
-        "schema": os.getenv("PGSCHEMA", "public"),
-    }
-
-CFG = _load_secrets()
-SCHEMA = CFG.get("schema", "public")
-
-# =========================
-# DB Connection (psycopg v3)
-# =========================
-@st.cache_resource(show_spinner=False)
-def get_engine():
-    assert CFG["host"] and CFG["database"] and CFG["user"], "Database secrets missing."
-    url = (
-        f"postgresql+psycopg://{CFG['user']}:{CFG['password']}"
-        f"@{CFG['host']}:{CFG['port']}/{CFG['database']}?sslmode={CFG['sslmode']}"
-    )
-    engine = create_engine(url, pool_pre_ping=True)
-    return engine
-
-# =========================
-# Data access helpers
-# =========================
-@st.cache_data(ttl=300, show_spinner=False)
-def list_tables(schema: str) -> list[str]:
-    q = text("""
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = :schema
-        ORDER BY table_name;
-    """)
-    with get_engine().connect() as conn:
-        return [r[0] for r in conn.execute(q, {"schema": schema}).fetchall()]
-
-@st.cache_data(ttl=300, show_spinner=False)
-def get_columns(schema: str, table: str) -> pd.DataFrame:
-    q = text("""
-        SELECT
-          c.ordinal_position,
-          c.column_name,
-          c.data_type,
-          c.is_nullable,
-          c.column_default
-        FROM information_schema.columns c
-        WHERE c.table_schema = :schema AND c.table_name = :table
-        ORDER BY c.ordinal_position;
-    """)
-    with get_engine().connect() as conn:
-        rows = conn.execute(q, {"schema": schema, "table": table}).fetchall()
-    return pd.DataFrame(rows, columns=["ordinal_position","column_name","data_type","is_nullable","column_default"])
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_df(schema: str, table: str, limit: int | None = 5000) -> pd.DataFrame:
-    if limit and limit > 0:
-        sql = text(f'SELECT * FROM "{schema}"."{table}" LIMIT :lim')
-        params = {"lim": int(limit)}
-    else:
-        sql = text(f'SELECT * FROM "{schema}"."{table}"')
-        params = {}
-    with get_engine().connect() as conn:
-        return pd.read_sql(sql, conn, params=params)
-
-@st.cache_data(ttl=300, show_spinner=False)
-def count_rows(schema: str, table: str) -> int:
-    sql = text(f'SELECT COUNT(*) FROM "{schema}"."{table}"')
-    with get_engine().connect() as conn:
-        return int(conn.execute(sql).scalar())
-
-def try_parse_datetimes(df: pd.DataFrame) -> pd.DataFrame:
-    for col in df.columns:
-        if df[col].dtype == "object" and any(k in col.lower() for k in ["time","date","created","updated","timestamp","at"]):
-            try:
-                df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
-            except Exception:
-                pass
-    return df
-
-# =========================
-# Plot helpers (matplotlib)
-# =========================
-def plot_missingness(df: pd.DataFrame, title: str):
-    na_counts = df.isna().sum()
-    na_counts = na_counts[na_counts > 0].sort_values(ascending=False)
-    if na_counts.empty:
-        st.info(f"No missing values in **{title}**.")
-        return
-    fig = plt.figure(figsize=(8, max(2.6, 0.3 * len(na_counts))))
-    plt.barh(na_counts.index.astype(str), na_counts.values)
-    plt.xlabel("Missing count")
-    plt.ylabel("Columns")
-    plt.title(f"{title}: Missing values per column")
-    st.pyplot(fig)
-
-def plot_numeric_hists(df: pd.DataFrame, title: str, bins: int = 30):
-    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if not num_cols:
-        st.info(f"No numeric columns in **{title}**.")
-        return
-    for col in num_cols:
-        data = df[col].dropna()
-        if data.empty:
-            continue
-        fig = plt.figure(figsize=(6, 3.6))
-        plt.hist(data.values, bins=bins)
-        plt.title(f"{title}: Histogram of {col}")
-        plt.xlabel(col); plt.ylabel("Frequency")
-        st.pyplot(fig)
-
-def plot_categorical_bars(df: pd.DataFrame, title: str, top_n: int = 20):
-    cat_cols = df.select_dtypes(include=["object","category"]).columns.tolist()
-    if not cat_cols:
-        st.info(f"No categorical columns in **{title}**.")
-        return
-    for col in cat_cols:
-        vc = df[col].astype("object").fillna("⟂(NaN)").value_counts().head(top_n)
-        if vc.empty:
-            continue
-        fig = plt.figure(figsize=(8, max(2.6, 0.3 * len(vc))))
-        plt.barh(vc.index.astype(str), vc.values)
-        plt.gca().invert_yaxis()
-        plt.title(f"{title}: Top {top_n} of {col}")
-        plt.xlabel("Count"); plt.ylabel(col)
-        st.pyplot(fig)
-
-def plot_corr_heatmap(df: pd.DataFrame, title: str):
-    corr = df.select_dtypes(include=[np.number]).corr(numeric_only=True)
-    if corr.empty:
-        st.info(f"No numeric correlation matrix for **{title}**.")
-        return
-    fig = plt.figure(figsize=(8, 6))
-    im = plt.imshow(corr.values, aspect="auto", interpolation="nearest")
-    plt.colorbar(im, fraction=0.046, pad=0.04)
-    plt.xticks(range(len(corr.columns)), corr.columns, rotation=90)
-    plt.yticks(range(len(corr.index)), corr.index)
-    plt.title(f"{title}: Correlation Heatmap")
-    st.pyplot(fig)
-
-def plot_boxplots(df: pd.DataFrame, title: str):
-    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if not num_cols:
-        st.info(f"No numeric columns in **{title}** for boxplots.")
-        return
-    for col in num_cols:
-        s = df[col].dropna()
-        if s.empty:
-            continue
-        fig = plt.figure(figsize=(6, 2.6))
-        plt.boxplot(s.values, vert=False, whis=1.5)
-        plt.title(f"{title}: Boxplot of {col}")
-        plt.xlabel(col)
-        st.pyplot(fig)
-
-def plot_time_trends(df: pd.DataFrame, title: str):
-    time_cols = [c for c in df.columns if np.issubdtype(df[c].dtype, np.datetime64)]
-    if not time_cols:
-        st.info(f"No datetime columns detected in **{title}**.")
-        return
-    for col in time_cols:
-        s = pd.to_datetime(df[col], errors="coerce").dropna()
-        if s.empty:
-            continue
-        series = s.dt.tz_localize(None).dt.date.value_counts().sort_index()
-        if series.empty:
-            continue
-        fig = plt.figure(figsize=(10, 3.4))
-        plt.plot(list(series.index), series.values)
-        plt.title(f"{title}: Daily count by {col}")
-        plt.xlabel("Date"); plt.ylabel("Count")
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-
-# =========================
-# Sidebar
-# =========================
-with st.sidebar:
-    st.header("🔌 Data Source")
-    st.write(f"**Host**: `{CFG.get('host')}`")
-    st.write(f"**DB**: `{CFG.get('database')}`")
-    st.write(f"**Schema**: `{SCHEMA}`")
-
-    st.divider()
-    st.subheader("📂 Tables")
-    tables = list_tables(SCHEMA)
-    if not tables:
-        st.error("No tables found. Check DB credentials / schema / privileges.")
-        st.stop()
-
-    table = st.selectbox("Default table for EDA", options=tables, index=tables.index("chat_messages") if "chat_messages" in tables else 0)
-    limit = st.slider("Max rows to load", min_value=500, max_value=50000, value=5000, step=500)
-
-    st.divider()
-    st.subheader("⚙️ Display Options")
-    show_raw = st.checkbox("Show raw data preview", value=True)
-    top_n_cats = st.number_input("Top categories (bar charts)", min_value=5, max_value=50, value=20, step=1)
-    bins_num = st.number_input("Histogram bins (numeric)", min_value=10, max_value=100, value=30, step=5)
-
-# =========================
-# Tabs
-# =========================
-tab_overview, tab_table_eda, tab_all_eda, tab_messages, tab_sql = st.tabs(
-    ["Overview", "Table EDA", "Run EDA for ALL Tables", "Messages Explorer", "SQL Runner"]
+# =============================
+# App Config
+# =============================
+st.set_page_config(
+    page_title="Chatbot EDA & Explorer",
+    page_icon="🤖",
+    layout="wide",
 )
 
-# ---------- Overview ----------
-with tab_overview:
-    st.subheader("Tables in schema")
-    st.write(", ".join(f"`{t}`" for t in tables))
+st.markdown(
+    """
+    <style>
+    .small-note { font-size: 0.85rem; color: #6b7280; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-    # quick sizes
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Row counts** (first 8 tables)")
-        sizes = []
-        for t in tables[:8]:
-            try:
-                sizes.append((t, count_rows(SCHEMA, t)))
-            except Exception as e:
-                sizes.append((t, f"error: {e}"))
-        st.dataframe(pd.DataFrame(sizes, columns=["table","row_count"]), use_container_width=True)
-    with col2:
-        st.markdown("**Schema of selected table**")
-        st.dataframe(get_columns(SCHEMA, table), use_container_width=True)
+# =============================
+# Helpers
+# =============================
+DEFAULT_SCHEMA = "public"
+KNOWN_TABLES = [
+    "chat_feedback",
+    "chat_messages",
+    "chat_sessions",
+    "conversation_history",
+    "conversation_sessions",
+    "otp_verifications",
+    "otps",
+    "user_feedback",
+]
 
-# ---------- Per-table EDA ----------
-with tab_table_eda:
-    st.subheader(f"EDA · `{SCHEMA}.{table}`")
-    with st.spinner("Loading table…"):
-        df = fetch_df(SCHEMA, table, limit=limit)
-        df = try_parse_datetimes(df)
 
-    st.markdown(f"**Shape:** `{df.shape[0]} rows × {df.shape[1]} cols`")
-    if show_raw:
-        st.write("**Sample (first 1,000 rows):**")
-        st.dataframe(df.head(1000), use_container_width=True)
+def build_conn_url() -> str:
+    host = st.session_state.get("DB_HOST") or os.getenv("DB_HOST", "localhost")
+    port = st.session_state.get("DB_PORT") or os.getenv("DB_PORT", "5432")
+    name = st.session_state.get("DB_NAME") or os.getenv("DB_NAME", "postgres")
+    user = st.session_state.get("DB_USER") or os.getenv("DB_USER", "postgres")
+    pwd = st.session_state.get("DB_PASSWORD") or os.getenv("DB_PASSWORD", "postgres")
+    sslmode = st.session_state.get("DB_SSLMODE") or os.getenv("DB_SSLMODE", "prefer")
+    return f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{name}?sslmode={sslmode}"
 
-    st.markdown("**Column dtypes**")
-    st.dataframe(pd.DataFrame({"column": df.columns, "dtype": df.dtypes.astype(str)}), use_container_width=True)
 
-    st.markdown("**Descriptive statistics (numeric)**")
-    try:
-        st.dataframe(df.describe(include="number").T, use_container_width=True)
-    except Exception:
-        st.info("No numeric columns.")
+@st.cache_resource(show_spinner=False)
+def get_engine(conn_url: str) -> Engine:
+    return create_engine(conn_url, pool_pre_ping=True)
 
-    st.markdown("**Descriptive statistics (categorical)**")
-    try:
-        st.dataframe(df.describe(include="object").T, use_container_width=True)
-    except Exception:
-        st.info("No categorical columns.")
 
-    st.divider()
-    plot_missingness(df, title=table)
-    plot_numeric_hists(df, title=table, bins=bins_num)
-    plot_categorical_bars(df, title=table, top_n=top_n_cats)
-    plot_corr_heatmap(df, title=table)
-    plot_boxplots(df, title=table)
-    plot_time_trends(df, title=table)
+@st.cache_data(show_spinner=False)
+def get_now(engine: Engine) -> datetime:
+    with engine.begin() as conn:
+        return conn.execute(text("SELECT NOW()")) .scalar_one()
 
-# ---------- All-tables EDA ----------
-with tab_all_eda:
-    st.subheader("Run EDA for ALL tables")
-    st.caption("This can be heavy. Uses the row limit in the sidebar for each table.")
-    if st.button("Run EDA for all tables"):
-        for t in tables:
-            st.markdown(f"### `{SCHEMA}.{t}`")
-            try:
-                df_t = fetch_df(SCHEMA, t, limit=limit)
-                df_t = try_parse_datetimes(df_t)
-                st.write(f"**Shape:** `{df_t.shape[0]} × {df_t.shape[1]}`")
-                st.dataframe(get_columns(SCHEMA, t), use_container_width=True)
-                plot_missingness(df_t, title=t)
-                plot_numeric_hists(df_t, title=t, bins=bins_num)
-                plot_categorical_bars(df_t, title=t, top_n=top_n_cats)
-                plot_corr_heatmap(df_t, title=t)
-                plot_boxplots(df_t, title=t)
-                plot_time_trends(df_t, title=t)
-                st.divider()
-            except Exception as e:
-                st.warning(f"Failed EDA for `{t}`: {e}")
 
-# ---------- Messages Explorer ----------
-with tab_messages:
-    st.subheader("💬 Messages Explorer (`chat_messages`)")
-    if "chat_messages" not in tables:
-        st.warning("`chat_messages` table not found.")
-    else:
-        # Filters
-        colA, colB, colC, colD = st.columns([1,1,1,2])
-        with colA:
-            page_size = st.selectbox("Page size", [25, 50, 100, 200], index=1)
-        with colB:
-            page = st.number_input("Page", min_value=1, value=1, step=1)
-        with colC:
-            # message_type values
-            try:
-                q_types = text(f'SELECT DISTINCT message_type FROM "{SCHEMA}"."chat_messages" ORDER BY 1')
-                with get_engine().connect() as conn:
-                    types = [r[0] for r in conn.execute(q_types).fetchall() if r[0] is not None]
-            except Exception:
-                types = []
-            msg_type = st.selectbox("Message type", options=["(all)"] + types)
-        with colD:
-            keyword = st.text_input("Search keyword in content (ILIKE)", value="")
+@st.cache_data(show_spinner=False)
+def fetch_dataframe(engine: Engine, sql: str, params: Optional[dict] = None, limit_preview: Optional[int] = None) -> pd.DataFrame:
+    with engine.begin() as conn:
+        df = pd.read_sql(text(sql), conn, params=params)
+    if limit_preview is not None and len(df) > limit_preview:
+        return df.head(limit_preview).copy()
+    return df
 
-        colE, colF = st.columns(2)
-        with colE:
-            # date range on timestamp
-            default_end = datetime.utcnow().date()
-            default_start = default_end - timedelta(days=30)
-            start_date = st.date_input("Start date (timestamp)", value=default_start)
-        with colF:
-            end_date = st.date_input("End date (timestamp)", value=default_end)
 
-        session_id = st.text_input("Filter by session_id (exact match)", value="")
+@st.cache_data(show_spinner=False)
+def get_columns(engine: Engine, table: str, schema: str = DEFAULT_SCHEMA) -> pd.DataFrame:
+    sql = text(
+        """
+        SELECT column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = :schema AND table_name = :table
+        ORDER BY ordinal_position
+        """
+    )
+    with engine.begin() as conn:
+        return pd.read_sql(sql, conn, params={"schema": schema, "table": table})
 
-        # Build WHERE
-        where = ['1=1']
-        params = {}
-        if msg_type != "(all)":
-            where.append("message_type = :mt")
-            params["mt"] = msg_type
-        if keyword.strip():
-            where.append("content ILIKE :kw")
-            params["kw"] = f"%{keyword.strip()}%"
-        if session_id.strip():
-            where.append("session_id = :sid")
-            params["sid"] = session_id.strip()
-        if start_date:
-            where.append("timestamp >= :start_ts")
-            params["start_ts"] = f"{start_date} 00:00:00+00"
-        if end_date:
-            where.append("timestamp <= :end_ts")
-            params["end_ts"] = f"{end_date} 23:59:59.999+00"
 
-        where_sql = " AND ".join(where)
+@st.cache_data(show_spinner=False)
+def get_rowcount(engine: Engine, table: str, schema: str = DEFAULT_SCHEMA) -> int:
+    sql = text(f'SELECT COUNT(*) FROM "{schema}"."{table}"')
+    with engine.begin() as conn:
+        return int(conn.execute(sql).scalar_one())
 
-        # Count
-        q_count = text(f'SELECT COUNT(*) FROM "{SCHEMA}"."chat_messages" WHERE {where_sql}')
-        with get_engine().connect() as conn:
-            total = int(conn.execute(q_count, params).scalar())
 
-        # Page fetch
-        offset = (page - 1) * page_size
-        q_page = text(
-            f'''
-            SELECT id, session_id, message_type, content, "timestamp", message_metadata
-            FROM "{SCHEMA}"."chat_messages"
-            WHERE {where_sql}
-            ORDER BY "timestamp" DESC
-            LIMIT :lim OFFSET :off
-            '''
-        )
-        params_page = params | {"lim": int(page_size), "off": int(offset)}
-        df_msgs = pd.read_sql(q_page, get_engine().connect(), params=params_page)
-
-        st.write(f"**Results:** {len(df_msgs)} / {total} rows  ·  Page {page} of {max(1, (total + page_size - 1) // page_size)}")
-        st.dataframe(df_msgs, use_container_width=True, height=500)
-
-        # CSV export
-        if not df_msgs.empty:
-            csv = df_msgs.to_csv(index=False).encode("utf-8")
-            st.download_button("Download current page as CSV", data=csv, file_name="chat_messages_page.csv", mime="text/csv")
-
-        # Optional: session context (shows latest 20 messages in that session)
-        if st.toggle("Show conversation context for a session_id"):
-            sid_ctx = st.text_input("Enter session_id for context")
-            if sid_ctx.strip():
-                q_ctx = text(
-                    f'''
-                    SELECT id, session_id, message_type, content, "timestamp"
-                    FROM "{SCHEMA}"."chat_messages"
-                    WHERE session_id = :sid
-                    ORDER BY "timestamp" DESC
-                    LIMIT 200
-                    '''
-                )
-                df_ctx = pd.read_sql(q_ctx, get_engine().connect(), params={"sid": sid_ctx.strip()})
-                st.write(f"Showing {len(df_ctx)} messages (latest first) for session_id = `{sid_ctx}`")
-                st.dataframe(df_ctx, use_container_width=True, height=600)
-
-# ---------- SQL Runner ----------
-with tab_sql:
-    st.subheader("📝 SQL Runner (read-only)")
-    st.markdown("Use `LIMIT` to keep results light. Mutation queries are blocked.")
-    default_sql = f'SELECT * FROM "{SCHEMA}"."{table}" LIMIT 50;'
-    user_sql = st.text_area("SQL", value=default_sql, height=160)
-    run = st.button("Run query")
-    if run and user_sql.strip():
+def _maybe_json_normalize(series: pd.Series) -> pd.DataFrame:
+    """Quick glance of JSON/JSONB column keys frequency (top-level only)."""
+    keys_freq: Dict[str, int] = {}
+    non_null = series.dropna()
+    for v in non_null[:2000]:  # sample top 2000 to avoid heavy scans
         try:
-            lowered = user_sql.strip().lower()
-            if any(kw in lowered for kw in ["update ", "insert ", "delete ", "drop ", "alter ", "create ", "truncate "]):
-                st.error("Mutation queries are disabled for safety.")
-            else:
-                dfq = pd.read_sql(text(user_sql), get_engine().connect())
-                st.success(f"Returned {len(dfq)} rows.")
-                st.dataframe(dfq, use_container_width=True)
-                if not dfq.empty:
-                    csv = dfq.to_csv(index=False).encode("utf-8")
-                    st.download_button("Download results as CSV", data=csv, file_name="query_results.csv", mime="text/csv")
+            obj = v if isinstance(v, (dict, list)) else json.loads(v)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            for k in obj.keys():
+                keys_freq[k] = keys_freq.get(k, 0) + 1
+        elif isinstance(obj, list):
+            keys_freq["__list_items__"] = keys_freq.get("__list_items__", 0) + len(obj)
+    if not keys_freq:
+        return pd.DataFrame()
+    df = pd.DataFrame(sorted(keys_freq.items(), key=lambda x: (-x[1], x[0])), columns=["key", "frequency_in_sample"])
+    return df
+
+
+def table_eda(engine: Engine, table: str, schema: str = DEFAULT_SCHEMA, sample_n: int = 5000):
+    st.subheader(f"📊 {table}")
+    cols_df = get_columns(engine, table, schema)
+    rowcount = get_rowcount(engine, table, schema)
+
+    c1, c2, c3 = st.columns([1, 1, 1])
+    c1.metric("Rows", f"{rowcount:,}")
+    c2.metric("Columns", f"{len(cols_df):,}")
+
+    with st.expander("Schema (information_schema)", expanded=False):
+        st.dataframe(cols_df, use_container_width=True, hide_index=True)
+
+    # Sampling strategy for EDA
+    limit = min(sample_n, max(1, rowcount))
+    with st.spinner("Loading sample for EDA..."):
+        df = fetch_dataframe(engine, f'SELECT * FROM "{schema}"."{table}" ORDER BY 1 DESC LIMIT {limit}')
+
+    st.caption(f"Sampled {len(df):,} rows out of {rowcount:,} for quick EDA.")
+
+    if len(df) == 0:
+        st.info("No data in table.")
+        return
+
+    # Basic overviews
+    with st.expander("Preview", expanded=True):
+        st.dataframe(df, use_container_width=True)
+
+    with st.expander("Data types & null counts", expanded=False):
+        info_df = pd.DataFrame({
+            "column": df.columns,
+            "dtype": [str(t) for t in df.dtypes.values],
+            "nulls": [int(df[c].isna().sum()) for c in df.columns],
+            "null_rate": [float(df[c].isna().mean()) for c in df.columns],
+            "unique": [int(df[c].nunique(dropna=True)) for c in df.columns],
+        })
+        st.dataframe(info_df.sort_values(["null_rate", "column"], ascending=[False, True]), use_container_width=True)
+
+    # Numeric description
+    numeric_cols = df.select_dtypes(include=["number", "datetime64[ns]"]).columns.tolist()
+    if numeric_cols:
+        with st.expander("Numeric/date summary", expanded=False):
+            st.dataframe(df[numeric_cols].describe(include="all").T, use_container_width=True)
+
+    # Categorical peek
+    cat_cols = [c for c in df.columns if c not in numeric_cols]
+    if cat_cols:
+        with st.expander("Top categories (head 15)", expanded=False):
+            top_k = st.slider("Top K", 5, 50, 15, key=f"topk_{table}")
+            for c in cat_cols:
+                vc = df[c].astype(str).value_counts(dropna=False).head(top_k).reset_index()
+                vc.columns = [c, "count"]
+                st.markdown(f"**{c}**")
+                st.dataframe(vc, use_container_width=True, hide_index=True)
+
+    # JSON columns summary
+    json_like_cols = [c for c in df.columns if any(df[c].astype(str).str.startswith(pref, na=False) for pref in ["{", "["]) or str(df[c].dtype) in ("object",)]
+    json_like_cols = [c for c in json_like_cols if any(df[c].astype(str).str.startswith("{") | df[c].astype(str).str.startswith("["))]
+    if json_like_cols:
+        with st.expander("JSON/JSONB keys frequency (sampled)", expanded=False):
+            for c in json_like_cols:
+                st.markdown(f"**{c}**")
+                keys_df = _maybe_json_normalize(df[c])
+                if keys_df.empty:
+                    st.caption("No parsable JSON objects in sample.")
+                else:
+                    st.dataframe(keys_df, use_container_width=True, hide_index=True)
+
+    # Simple time trend if timestamp-like columns exist
+    ts_cols = [c for c in df.columns if any(k in c.lower() for k in ["time", "date"]) and pd.api.types.is_datetime64_any_dtype(df[c])]
+    if ts_cols:
+        with st.expander("Simple time trend (count by day)", expanded=False):
+            ts_col = st.selectbox("Choose time column", ts_cols, key=f"ts_{table}")
+            tmp = df.dropna(subset=[ts_col]).copy()
+            tmp["_day"] = tmp[ts_col].dt.floor("D")
+            series = tmp.groupby("_day").size().reset_index(name="count")
+            st.bar_chart(series.set_index("_day"))
+
+
+# =============================
+# Sidebar – Connection & Navigation
+# =============================
+with st.sidebar:
+    st.header("⚙️ Database Connection")
+    st.text_input("Host", key="DB_HOST", value=os.getenv("DB_HOST", "localhost"))
+    st.text_input("Port", key="DB_PORT", value=os.getenv("DB_PORT", "5432"))
+    st.text_input("Database", key="DB_NAME", value=os.getenv("DB_NAME", "postgres"))
+    st.text_input("User", key="DB_USER", value=os.getenv("DB_USER", "postgres"))
+    st.text_input("Password", key="DB_PASSWORD", type="password", value=os.getenv("DB_PASSWORD", "postgres"))
+    st.text_input("SSL Mode", key="DB_SSLMODE", value=os.getenv("DB_SSLMODE", "prefer"))
+
+    schema = st.text_input("Schema", value=os.getenv("DB_SCHEMA", DEFAULT_SCHEMA))
+
+    if st.button("Connect", type="primary"):
+        st.session_state["_conn_url"] = build_conn_url()
+
+# If no connection yet, try from env
+conn_url = st.session_state.get("_conn_url") or build_conn_url()
+
+# Header
+st.title("🤖 Chatbot Data Explorer & EDA (No OTP)")
+st.caption(
+    "Explore and analyze your chatbot database with table‑wise EDA, message viewer with rich filters, and quick SQL runner."
+)
+
+# Attempt connect
+engine: Optional[Engine] = None
+try:
+    engine = get_engine(conn_url)
+    server_now = get_now(engine)
+    st.success(f"Connected. Server time: {server_now}")
+except Exception as e:
+    st.error("Could not connect to the database. Check credentials in the sidebar.")
+    st.exception(e)
+    st.stop()
+
+
+# =============================
+# Main Tabs
+# =============================
+tab_overview, tab_tables, tab_messages, tab_sql, tab_exports = st.tabs([
+    "Overview",
+    "Table EDA",
+    "Messages Viewer",
+    "SQL Runner",
+    "Exports",
+])
+
+# -----------------------------
+# Overview
+# -----------------------------
+with tab_overview:
+    st.subheader("Database Overview")
+    cols = st.columns(4)
+    for i, t in enumerate(KNOWN_TABLES):
+        try:
+            rc = get_rowcount(engine, t, schema)
+            cols[i % 4].metric(t, f"{rc:,} rows")
         except Exception as e:
+            cols[i % 4].metric(t, "—")
+
+    st.markdown("---")
+    st.markdown("### Quick Links")
+    st.markdown("• Go to **Table EDA** to inspect schemas, distributions, JSON keys, and time trends.")
+    st.markdown("• Go to **Messages Viewer** to browse all messages with filters, full‑text search, and pagination.")
+    st.markdown("• Use **SQL Runner** for ad‑hoc queries.")
+
+
+# -----------------------------
+# Table EDA
+# -----------------------------
+with tab_tables:
+    st.subheader("Table‑wise EDA")
+
+    target_tables = st.multiselect(
+        "Select tables to analyze",
+        options=KNOWN_TABLES,
+        default=KNOWN_TABLES,
+    )
+    sample_n = st.slider("Rows per table to sample for EDA", 500, 50000, 5000, step=500)
+
+    for t in target_tables:
+        with st.container(border=True):
+            table_eda(engine, t, schema=schema, sample_n=sample_n)
+
+
+# -----------------------------
+# Messages Viewer
+# -----------------------------
+with tab_messages:
+    st.subheader("Browse All Messages")
+
+    # Filters
+    with st.expander("Filters", expanded=True):
+        c1, c2, c3 = st.columns([1, 1, 1])
+        session_id = c1.text_input("Session ID contains")
+        msg_type = c2.selectbox("Message type", ["(any)", "user", "assistant", "system", "other"], index=0)
+        date_from = c3.date_input("From (date)", value=None)
+        c4, c5, c6 = st.columns([1, 1, 2])
+        date_to = c4.date_input("To (date)", value=None)
+        search = c5.text_input("Full‑text search in content (ILIKE)")
+        page_size = c6.select_slider("Page size", options=[25, 50, 100, 200, 500], value=100)
+
+    where = ["1=1"]
+    params: Dict[str, object] = {}
+
+    if session_id:
+        where.append("session_id ILIKE :sid")
+        params["sid"] = f"%{session_id}%"
+    if msg_type and msg_type != "(any)":
+        where.append("message_type = :mtype")
+        params["mtype"] = msg_type
+    if search:
+        where.append("content ILIKE :q")
+        params["q"] = f"%{search}%"
+    if date_from:
+        where.append("timestamp >= :dfrom")
+        params["dfrom"] = datetime.combine(date_from, datetime.min.time())
+    if date_to:
+        where.append("timestamp < :dto")
+        params["dto"] = datetime.combine(date_to + timedelta(days=1), datetime.min.time())
+
+    where_sql = " AND ".join(where)
+
+    # Count query
+    count_sql = f'SELECT COUNT(*) FROM "{schema}"."chat_messages" WHERE {where_sql}'
+    try:
+        total = fetch_dataframe(engine, count_sql, params).iloc[0, 0]
+    except Exception as e:
+        st.error("Failed to count messages. Check connection and permissions.")
+        st.exception(e)
+        total = 0
+
+    # Pagination
+    total_pages = max(1, math.ceil(total / page_size))
+    page = st.number_input("Page", min_value=1, max_value=max(1, total_pages), value=1)
+    offset = (page - 1) * page_size
+
+    # Data query
+    data_sql = text(
+        f"""
+        SELECT id, session_id, message_type, content, timestamp, message_metadata
+        FROM "{schema}"."chat_messages"
+        WHERE {where_sql}
+        ORDER BY timestamp DESC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+    params_page = dict(params)
+    params_page.update({"limit": int(page_size), "offset": int(offset)})
+
+    try:
+        df_msg = fetch_dataframe(engine, str(data_sql), params_page)
+        st.caption(f"Showing {len(df_msg):,} of {total:,} messages | page {page:,} / {total_pages:,}")
+        st.dataframe(df_msg, use_container_width=True)
+    except Exception as e:
+        st.error("Failed to fetch messages.")
+        st.exception(e)
+
+    # Conversation preview by Session ID
+    with st.expander("View conversation by Session ID", expanded=False):
+        sid_exact = st.text_input("Exact Session ID")
+        max_messages = st.slider("Max messages to pull", 50, 2000, 200)
+        if sid_exact:
+            try:
+                convo_df = fetch_dataframe(
+                    engine,
+                    f"""
+                    SELECT message_type, content, timestamp
+                    FROM "{schema}"."chat_messages"
+                    WHERE session_id = :s
+                    ORDER BY timestamp ASC
+                    LIMIT :lim
+                    """,
+                    params={"s": sid_exact, "lim": int(max_messages)},
+                )
+                for _, row in convo_df.iterrows():
+                    role = row["message_type"].upper()
+                    st.markdown(f"**{role}** · {row['timestamp']}")
+                    st.markdown(
+                        f"""
+                        <div class='mono' style='white-space: pre-wrap; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px;'>
+                        {st.session_state.get('','')}
+                        {row['content']}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            except Exception as e:
+                st.error("Failed to fetch conversation by session.")
+                st.exception(e)
+
+
+# -----------------------------
+# SQL Runner
+# -----------------------------
+with tab_sql:
+    st.subheader("Run SQL")
+    sql_input = st.text_area(
+        "SQL",
+        value=textwrap.dedent(
+            f"""
+            -- Example: row counts for key tables
+            SELECT 'chat_messages' AS table, COUNT(*) AS rows FROM "{schema}"."chat_messages"
+            UNION ALL SELECT 'chat_feedback', COUNT(*) FROM "{schema}"."chat_feedback"
+            UNION ALL SELECT 'chat_sessions', COUNT(*) FROM "{schema}"."chat_sessions";
+            """
+        ).strip(),
+        height=180,
+        help="Only SELECT statements are recommended. Use at your own risk.",
+    )
+    if st.button("Execute", type="primary"):
+        try:
+            df_sql = fetch_dataframe(engine, sql_input)
+            st.dataframe(df_sql, use_container_width=True)
+        except Exception as e:
+            st.error("Query failed.")
             st.exception(e)
 
-st.caption("© MIVA — DB EDA & Explorer. Keep credentials in Streamlit Secrets or env vars. Read-only recommended.")
+
+# -----------------------------
+# Exports
+# -----------------------------
+with tab_exports:
+    st.subheader("Quick Exports (CSV)")
+    pick_table = st.selectbox("Choose a table", KNOWN_TABLES, index=1)
+    sample_for_export = st.number_input("Max rows to export", min_value=100, max_value=1_000_000, value=50_000, step=100)
+    if st.button("Prepare Download"):
+        try:
+            df_exp = fetch_dataframe(engine, f'SELECT * FROM "{schema}"."{pick_table}" LIMIT :n', {"n": int(sample_for_export)})
+            st.download_button(
+                label=f"Download {pick_table}.csv",
+                data=df_exp.to_csv(index=False).encode("utf-8"),
+                file_name=f"{pick_table}.csv",
+                mime="text/csv",
+            )
+        except Exception as e:
+            st.error("Export failed.")
+            st.exception(e)
+
+
+# =============================
+# Footer
+# =============================
+st.markdown("---")
+st.caption(
+    "Built for detailed EDA across all tables in the updated schema. This app retains core explorer components and adds rich filtering, schema introspection, JSON key summaries, and time‑trend views."
+)
